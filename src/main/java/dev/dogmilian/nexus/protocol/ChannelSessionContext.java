@@ -74,7 +74,25 @@ public final class ChannelSessionContext {
     }
 
     private void dispatchToRingBuffer(VectorizedFrameDecoder.Header header, ByteBuffer payload) {
-        // To be implemented in Phase 4 (LMAX Disruptor hot-path)
+        dev.dogmilian.nexus.engine.NexusRingBuffer ring = dev.dogmilian.nexus.NexusGlobal.ENGINE.getRingBuffer();
+        
+        // Wait-free claim next sequence
+        long seq = ring.next();
+        dev.dogmilian.nexus.engine.NexusEvent event = ring.get(seq);
+        
+        // Populate event
+        event.header = header;
+        
+        // Copy buffer slice because the original buffer will be compacted and reused immediately
+        ByteBuffer snapshot = ByteBuffer.allocateDirect(payload.remaining());
+        snapshot.put(payload);
+        snapshot.flip();
+        event.payload = snapshot;
+        
+        event.sourceChannel = this.channel;
+        
+        // Wait-free publish
+        ring.publish(seq);
     }
 
     private void close() {
