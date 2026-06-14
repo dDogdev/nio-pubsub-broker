@@ -1,6 +1,7 @@
 package dev.dogmilian.nexus.network;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
 import java.nio.channels.SocketChannel;
@@ -8,6 +9,8 @@ import java.util.Iterator;
 import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.ConcurrentLinkedQueue;
+
+import dev.dogmilian.nexus.protocol.ChannelSessionContext;
 
 /**
  * Worker Loop handles OP_READ / OP_WRITE for multiple channels.
@@ -88,7 +91,9 @@ public final class WorkerLoop implements Runnable {
         while ((channel = pendingRegistrations.poll()) != null) {
             try {
                 // Register for OP_READ by default, OP_WRITE triggers asynchronously when needed
-                channel.register(selector, SelectionKey.OP_READ);
+                SelectionKey key = channel.register(selector, SelectionKey.OP_READ);
+                ChannelSessionContext ctx = new ChannelSessionContext(key, channel, ByteBuffer.allocateDirect(1024 * 64));
+                key.attach(ctx);
             } catch (IOException e) {
                 // Decapitate client if registration fails
                 try {
@@ -99,7 +104,14 @@ public final class WorkerLoop implements Runnable {
     }
 
     private void handleRead(SelectionKey key) {
-        // Implemented in Phase 3 (SIMD / Protocol Decoding)
+        ChannelSessionContext ctx = (ChannelSessionContext) key.attachment();
+        if (ctx != null) {
+            try {
+                ctx.read();
+            } catch (IOException e) {
+                key.cancel();
+            }
+        }
     }
 
     private void handleWrite(SelectionKey key) {

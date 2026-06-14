@@ -1,0 +1,87 @@
+package dev.dogmilian.nexus.protocol;
+
+import java.nio.ByteBuffer;
+import java.nio.channels.SelectionKey;
+import java.nio.channels.SocketChannel;
+import java.io.IOException;
+
+/**
+ * Reader State Machine strictly coupled with the SelectionKey.
+ * Handles TCP fragmentation, MTU cuts, and buffers off-heap.
+ * Protects the WorkerLoop by never blocking.
+ */
+public final class ChannelSessionContext {
+    public enum State {
+        AWAITING_HEADER,
+        READING_PAYLOAD
+    }
+
+    private State state = State.AWAITING_HEADER;
+    private final ByteBuffer buffer;
+    private final SelectionKey key;
+    private final SocketChannel channel;
+    
+    private VectorizedFrameDecoder.Header currentHeader;
+
+    public ChannelSessionContext(SelectionKey key, SocketChannel channel, ByteBuffer buffer) {
+        this.key = key;
+        this.channel = channel;
+        this.buffer = buffer;
+    }
+
+    public void read() throws IOException {
+        int bytesRead = channel.read(buffer);
+        if (bytesRead == -1) {
+            close();
+            return;
+        }
+
+        // Prepare buffer for reading data
+        buffer.flip();
+
+        while (buffer.hasRemaining()) {
+            if (state == State.AWAITING_HEADER) {
+                if (buffer.remaining() < 8) {
+                    break; // TCP Fragmentation: Wait for more bytes to form the 8-byte header
+                }
+                
+                // SIMD Header Validation & Parsing
+                this.currentHeader = VectorizedFrameDecoder.decodeHeader(buffer, buffer.position());
+                buffer.position(buffer.position() + 8); // Advance pointer past header
+                this.state = State.READING_PAYLOAD;
+            }
+
+            if (state == State.READING_PAYLOAD) {
+                if (buffer.remaining() < currentHeader.payloadLength()) {
+                    break; // TCP Fragmentation: Wait for the rest of the payload
+                }
+
+                // Zero-copy extraction of the payload slice
+                ByteBuffer payloadSlice = buffer.slice(buffer.position(), currentHeader.payloadLength());
+                buffer.position(buffer.position() + currentHeader.payloadLength());
+
+                // Hand-off to RingBuffer (Phase 4 integration)
+                dispatchToRingBuffer(currentHeader, payloadSlice);
+
+                // Reset state for the next continuous frame in the stream
+                this.state = State.AWAITING_HEADER;
+                this.currentHeader = null;
+            }
+        }
+
+        // Buffer compaction: shifts unread bytes to the start, positioning for next OS write
+        buffer.compact();
+    }
+
+    private void dispatchToRingBuffer(VectorizedFrameDecoder.Header header, ByteBuffer payload) {
+        // To be implemented in Phase 4 (LMAX Disruptor hot-path)
+    }
+
+    private void close() {
+        try {
+            channel.close();
+        } catch (IOException ignored) {}
+        key.cancel();
+        // Here we would release the buffer back to DirectBufferPool
+    }
+}
