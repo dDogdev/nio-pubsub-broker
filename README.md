@@ -15,6 +15,19 @@ O **Nexus Broker** é um message broker open-source focado puramente em throughp
 
 A ideia aqui é aplicar princípios severos de otimização: remover filas baseadas em locks pesados, evitar o uso da heap o máximo possível e punir clientes lentos que tentam ditar o ritmo da rede. O Nexus foi construído usando as features experimentais do Java 22 para competir com soluções nativas (C++/Rust) em ambientes de trading (HFT).
 
+## 📊 Status do Projeto & Roadmap
+
+O Nexus encontra-se em **fase Alpha (v1.0.0-SNAPSHOT)**. O núcleo do motor está finalizado, mas o foco atual é a estabilização e a bateria de testes. Como ainda não atingimos a primeira release estável, não há binários pré-compilados na aba de **Releases** — o uso atual exige a compilação local pelo código-fonte.
+
+- [x] Motor de rede Multi-Reactor lock-free.
+- [x] Decodificação SIMD via Vector API.
+- [x] RingBuffer LMAX e Virtual Threads (Loom).
+- [x] Watchdog autônomo contra slow consumers.
+- [x] Pipeline CI/CD estruturado.
+- [ ] Bateria extensiva de testes de integração.
+- [ ] Benchmarks de latência oficiais (vs Kafka/Aeron).
+- [ ] Lançamento Oficial da `v1.0.0` (Binários via GitHub Releases).
+
 ## ⚙️ Arquitetura e Mechanical Sympathy
 
 O projeto é construído sobre quatro pilares técnicos:

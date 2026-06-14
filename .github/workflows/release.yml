@@ -1,0 +1,54 @@
+name: Nexus Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    name: Build Nexus Broker
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Set up JDK 22
+      uses: actions/setup-java@v4
+      with:
+        java-version: '22'
+        distribution: 'oracle'
+        cache: maven
+
+    - name: Compile and Package with Maven
+      run: mvn clean package -B
+      
+    - name: Upload Build Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: nexus-broker
+        path: target/nexus-*.jar
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+      
+    steps:
+    - name: Download Build Artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: nexus-broker
+        path: ./build
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: ./build/nexus-*.jar
+        generate_release_notes: true

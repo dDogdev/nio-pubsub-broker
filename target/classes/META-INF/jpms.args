@@ -1,0 +1,4 @@
+--add-modules
+jdk.incubator.vector
+--add-exports
+java.base/jdk.internal.vm.annotation=ALL-UNNAMED
