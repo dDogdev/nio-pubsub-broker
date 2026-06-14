@@ -9,6 +9,9 @@ public final class NexusGlobal {
     public static final DisruptorEngine ENGINE = new DisruptorEngine(1024 * 64, ROUTER);
     public static final java.util.concurrent.atomic.AtomicInteger ACTIVE_CONNECTIONS = new java.util.concurrent.atomic.AtomicInteger(0);
     
+    // Zero-Trust Handshake Secret
+    public static final long SERVER_SECRET = 0xCAFEBABE12345678L;
+
     static {
         ENGINE.start();
     }

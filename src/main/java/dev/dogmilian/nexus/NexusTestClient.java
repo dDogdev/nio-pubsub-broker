@@ -12,7 +12,13 @@ public class NexusTestClient {
             OutputStream out = socket.getOutputStream();
             InputStream in = socket.getInputStream();
             
-            System.out.println("[CLIENT] Connected! Sending PUB frame...");
+            System.out.println("[CLIENT] Connected! Sending Authentication Handshake...");
+            ByteBuffer handshake = ByteBuffer.allocate(8);
+            handshake.putLong(0xCAFEBABE12345678L);
+            out.write(handshake.array());
+            out.flush();
+
+            System.out.println("[CLIENT] Handshake sent. Sending PUB frame...");
             // Frame Layout:
             // [0-1] Magic: 0x4E 0x4D
             // [2] Flags: 0x01 (PUB)

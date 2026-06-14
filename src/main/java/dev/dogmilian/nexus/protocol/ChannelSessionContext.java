@@ -12,11 +12,12 @@ import java.io.IOException;
  */
 public final class ChannelSessionContext {
     public enum State {
+        AWAITING_HANDSHAKE,
         AWAITING_HEADER,
         READING_PAYLOAD
     }
 
-    private State state = State.AWAITING_HEADER;
+    private State state = State.AWAITING_HANDSHAKE;
     // Removed the permanent 64KB off-heap buffer per client to fix OOM DDoS vector
     // Only a small heap array for fragmented/partial frames
     private byte[] pendingBytes = null;
@@ -53,6 +54,17 @@ public final class ChannelSessionContext {
         sharedReadBuffer.flip();
 
         while (sharedReadBuffer.hasRemaining()) {
+            if (state == State.AWAITING_HANDSHAKE) {
+                if (sharedReadBuffer.remaining() < 8) {
+                    break; // Wait for full 8-byte handshake secret
+                }
+                long secret = sharedReadBuffer.getLong();
+                if (secret != dev.dogmilian.nexus.NexusGlobal.SERVER_SECRET) {
+                    throw new java.net.ProtocolException("Protocol Violation: Invalid Handshake Secret");
+                }
+                this.state = State.AWAITING_HEADER;
+            }
+
             if (state == State.AWAITING_HEADER) {
                 if (sharedReadBuffer.remaining() < 8) {
                     break; // Wait for more bytes to form the 8-byte header
