@@ -84,11 +84,13 @@ public final class ChannelSessionContext {
         // Populate event
         event.header = header;
         
-        // Copy buffer slice because the original buffer will be compacted and reused immediately
-        ByteBuffer snapshot = ByteBuffer.allocateDirect(payload.remaining());
-        snapshot.put(payload);
-        snapshot.flip();
-        event.payload = snapshot;
+        // Zero-GC Payload copy into pre-allocated buffer
+        event.payload.clear();
+        if (payload.remaining() > dev.dogmilian.nexus.engine.NexusEvent.MAX_PAYLOAD_SIZE) {
+            payload.limit(payload.position() + dev.dogmilian.nexus.engine.NexusEvent.MAX_PAYLOAD_SIZE);
+        }
+        event.payload.put(payload);
+        event.payload.flip();
         
         event.sourceChannel = this.channel;
         
