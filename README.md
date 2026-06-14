@@ -1,9 +1,11 @@
 <div align="center">
   <h1>NEXUS BROKER</h1>
-  <p><b>Pub/Sub de altíssima performance com foco em Mechanical Sympathy.</b></p>
+  <p><b>Pub/Sub de Ultra-Baixa Latência, Mechanical Sympathy e Segurança Perimetral em Java Puro.</b></p>
   <p>
     <a href="https://java.com"><img src="https://img.shields.io/badge/Java-22%2B-black?style=for-the-badge&logo=java" alt="Java 22"></a>
     <a href="https://github.com/dDogdev/nio-pubsub-broker/pulls"><img src="https://img.shields.io/badge/PRs-Welcome-black?style=for-the-badge" alt="PRs Welcome"></a>
+    <a href="#"><img src="https://img.shields.io/badge/Arch-Zero--GC-blue?style=for-the-badge" alt="Zero-GC"></a>
+    <a href="#"><img src="https://img.shields.io/badge/Security-Zero--Trust-red?style=for-the-badge" alt="Zero-Trust"></a>
   </p>
 </div>
 
@@ -11,38 +13,31 @@
 
 ## 🏴‍☠️ Visão Geral
 
-O **Nexus Broker** é um message broker open-source focado puramente em throughput e baixa latência. Sistemas tradicionais na JVM costumam sofrer com overhead de garbage collection e alocação excessiva em momentos de pico (hot-path).
+O **Nexus Broker** é um message broker open-source focado puramente em throughput, latência de microsegundos e resiliência militar. Sistemas tradicionais na JVM costumam sofrer com overhead de garbage collection, alocação excessiva em momentos de pico (hot-path) e vulnerabilidades estruturais de negação de serviço.
 
-A ideia aqui é aplicar princípios severos de otimização: remover filas baseadas em locks pesados, evitar o uso da heap o máximo possível e punir clientes lentos que tentam ditar o ritmo da rede. O Nexus foi construído usando as features experimentais do Java 22 para competir com soluções nativas (C++/Rust) em ambientes de trading (HFT).
-
-## 📊 Status do Projeto & Roadmap
-
-O Nexus encontra-se em **fase Alpha (v1.0.0-SNAPSHOT)**. O núcleo do motor está finalizado, mas o foco atual é a estabilização e a bateria de testes. Como ainda não atingimos a primeira release estável, não há binários pré-compilados na aba de **Releases** — o uso atual exige a compilação local pelo código-fonte.
-
-- [x] Motor de rede Multi-Reactor lock-free.
-- [x] Decodificação SIMD via Vector API.
-- [x] RingBuffer LMAX e Virtual Threads (Loom).
-- [x] Watchdog autônomo contra slow consumers.
-- [x] Pipeline CI/CD estruturado.
-- [ ] Bateria extensiva de testes de integração.
-- [ ] Benchmarks de latência oficiais (vs Kafka/Aeron).
-- [ ] Lançamento Oficial da `v1.0.0` (Binários via GitHub Releases).
+A ideia aqui é aplicar princípios severos de otimização: remover filas baseadas em locks pesados, evitar o uso da heap o máximo possível, implementar decodificação vetorial via hardware e punir impiedosamente clientes lentos ou maliciosos que tentam ditar o ritmo ou exaurir os recursos da rede. O Nexus foi construído usando as features experimentais do Java 22 para competir com soluções nativas (C++/Rust) em ambientes de trading de alta frequência (HFT).
 
 ## ⚙️ Arquitetura e Mechanical Sympathy
 
-O projeto é construído sobre quatro pilares técnicos:
+O projeto é construído sobre cinco pilares técnicos e de engenharia agressiva:
 
-1. **Project Panama (FFM API) e Zero-GC Absoluto**: 
-   O hot-path atinge o ápice da simpatia de hardware: **0 bytes de alocação na heap** durante o roteamento. O broker pré-aloca 64.000 buffers de memória nativa (off-heap) no boot. Quando um socket lê dados da placa de rede, o pacote TCP é copiado em bloco diretamente para esses buffers pré-alocados no RingBuffer. O Garbage Collector do Java fica literalmente inativo durante o processamento das mensagens.
-   
-2. **Project Vector (SIMD)**: 
-   Não fazemos parsing do cabeçalho byte a byte. O decoder carrega os 8 bytes iniciais do frame diretamente em um registrador SIMD de 64-bits. A validação do Magic Number, leitura das flags e do tamanho do payload ocorrem em apenas 1 ciclo de CPU.
+### 1. Project Panama (FFM API) e Zero-GC Absoluto
+O hot-path atinge o ápice da simpatia de hardware: **0 bytes de alocação na heap** durante o roteamento. O broker usa uma técnica de *Thread-Local Buffer Sharing* onde 1 único buffer de leitura off-heap (64KB) é compartilhado rotativamente pela Thread de I/O, erradicando a exaustão de memória (OOM). Os eventos do LMAX pré-alocam memória direta e a cópia de payloads (fan-out) é feita com *Deep Copy* otimizada. O Garbage Collector do Java fica literalmente inativo durante a chuva de mensagens.
 
-3. **LMAX Disruptor & Project Loom**:
-   O roteamento interno usa um RingBuffer customizado e wait-free. Isolamos os ponteiros em linhas de cache L1/L2 com a anotação `@Contended` (padding de 128 bytes) para anular o impacto de False Sharing. O consumo das mensagens é despachado por Virtual Threads, garantindo paralelismo em massa para o fan-out sem exaurir recursos de hardware.
+### 2. Project Vector (SIMD) e Imunidade Zero-Day
+Não fazemos parsing do cabeçalho byte a byte. O decoder carrega os 8 bytes iniciais do frame diretamente em um registrador SIMD de 64-bits (`ByteVector.SPECIES_64`). A validação do Magic Number, leitura das flags e extração de tamanho ocorrem em apenas **1 ciclo de CPU**. Além disso, o motor joga exceções seguras em frames maliciosos (payload negativo, fragmentações inválidas), prevenindo Denial of Service nos parsers.
 
-4. **Watchdog de Slow Consumers**:
-   Controlamos o uso do `SO_SNDBUF` rigidamente. Se a janela TCP do cliente saturar e ele não conseguir processar as mensagens, o broker não reduz o throughput geral. Após 3 ciclos seguidos de falha de flush na memória off-heap, a conexão do cliente lento é derrubada e limpa pelo watchdog.
+### 3. LMAX Disruptor & Project Loom
+O roteamento interno usa um RingBuffer customizado e lock-free de múltiplos produtores. Isolamos os ponteiros (Sequences) em linhas independentes de cache L1/L2 com padding de 128 bytes (`@Contended`) aniquilando o impacto de *False Sharing*. O consumo é orquestrado por Virtual Threads (Project Loom), garantindo paralelismo em massa para o fan-out sem exaurir threads nativas do Kernel, enquanto o RingBuffer aplica backpressure mecânico (`Thread.onSpinWait()`).
+
+### 4. Zero-Trust Handshake & Segurança Perimetral
+Para combater a exaustão volumétrica:
+- **Zero-Trust Auth:** O primeiro pacote de um cliente conectado **deve** ser um long de 8 bytes com o `SERVER_SECRET` correto, ou ele é imediatamente decapitado.
+- **Camada L4 Backpressure:** O `BossAcceptor` possui um hard-limit dinâmico. Acima de 50.000 conexões ativas, ele recusa o accept e transfere a pressão (TCP Zero Window) diretamente para o OS Socket Backlog.
+- **Zombie Socket Reaper:** O `WorkerLoop` inspeciona a rede a cada 5 segundos. Conexões inativas por mais de 30 segundos sofrem "Drop" cirúrgico para evitar ataques de Slowloris.
+
+### 5. Watchdog de Slow Consumers
+Controlamos a exaustão do `SO_SNDBUF` de saída com crueldade. Se a janela TCP do cliente saturar e ele não conseguir processar a enxurrada de dados, o broker não reduz o ritmo global. Após uma série de 3 falhas críticas de flush, a conexão do cliente lento é fechada, evitando retenção excessiva na memória off-heap.
 
 ## 💻 Requisitos
 
@@ -71,11 +66,17 @@ java -XX:+UseZGC -XX:+ZGenerational -XX:+AlwaysPreTouch \
      -jar target/nexus-1.0.0-SNAPSHOT.jar
 ```
 
-## 📜 Protocolo Binário
+## 📜 Protocolo Binário (Zero-Trust)
 
-A comunicação via TCP exige um header binário restrito de exatamente 8 bytes.
+Para minimizar latência, nós usamos um protocolo TCP binário estrito e stateful.
 
-**Estrutura do Header (Big-Endian):**
+### Fase 1: O Handshake de Autenticação
+Imediatamente após a conexão TCP ser estabelecida, o cliente **precisa** injetar a chave secreta de 64-bits (Big-Endian). Ex: `0xCAFEBABE12345678L`.
+*Não existe reposta de "Sucesso". Se você errar a senha, o TCP é finalizado.*
+
+### Fase 2: O Cabeçalho Padrão
+Após a aceitação do Handshake, a conexão passa para o tráfego aberto de frames, sem overhead.
+**Estrutura do Header (Big-Endian, 8 bytes estritos):**
 - `[Byte 0-1]`: Magic Number (`0x4E 0x4D` = 'NM').
 - `[Byte 2]`: Flags Bitmask (`0x01`=PUB, `0x02`=SUB, `0x04`=ACK).
 - `[Byte 3]`: Topic Hash (`int8`, de 0 a 255).
@@ -88,10 +89,10 @@ Formato final do frame de rede: `[Header (8 bytes)] + [Payload]`.
 Pull requests são sempre bem-vindos. O critério principal de aceite no core do broker é simples: **não adicione alocações ou locks pesados no hot-path de rede**.
 
 1. Faça um fork e crie uma branch (`feature/seu-recurso` ou `perf/sua-otimizacao`).
-2. Garanta que suas mudanças não adicionam contenção de threads.
+2. Garanta que suas mudanças não adicionam contenção de threads ou GCs (Garbage Collections).
 3. Abra o PR com um resumo técnico das mudanças e seu impacto na latência.
 
 **Principais áreas para colaboração:**
 - Afinidade de CPU via JNI (Thread Pinning em SOs baseados em Unix).
-- Construção de SDKs nativos em Rust, C++ e Go.
+- Construção de SDKs nativos em Rust, C++ e Go (implementando o Zero-Trust Handshake).
 - Refinamentos na mitigação nativa do Linux Epoll Bug.
