@@ -1,95 +1,84 @@
 <div align="center">
   <h1>NEXUS BROKER</h1>
-  <p><b>The apex of Mechanical Sympathy in Open-Source Pub/Sub.</b></p>
-  <p>
-    <i>"The heap is lava. GC is the enemy. Hardware is your only ally."</i>
-  </p>
+  <p><b>Pub/Sub de altíssima performance com foco em Mechanical Sympathy.</b></p>
   <p>
     <a href="https://java.com"><img src="https://img.shields.io/badge/Java-22%2B-black?style=for-the-badge&logo=java" alt="Java 22"></a>
-    <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-black?style=for-the-badge" alt="License"></a>
     <a href="https://github.com/dDogdev/nio-pubsub-broker/pulls"><img src="https://img.shields.io/badge/PRs-Welcome-black?style=for-the-badge" alt="PRs Welcome"></a>
   </p>
 </div>
 
 ---
 
-## 🏴‍☠️ A Filosofia Nexus (Executive Summary)
+## 🏴‍☠️ Visão Geral
 
-Sistemas tradicionais de mensageria baseados na JVM sofrem da mesma doença crônica: a presunção de que o hardware é infinito e de que o *Garbage Collector* pode limpar a sujeira arquitetural. 
+O **Nexus Broker** é um message broker open-source focado puramente em throughput e baixa latência. Sistemas tradicionais na JVM costumam sofrer com overhead de garbage collection e alocação excessiva em momentos de pico (hot-path).
 
-O **Nexus Broker** nasceu de uma visão open-source radical: provar que a JVM pode humilhar sistemas de alta frequência (HFT) escritos em C/C++ ou Rust, desde que as abstrações sejam removidas. Nós construímos este broker para lidar com volumes interbancários e de trading engines, unindo a base da literatura clássica de performance (como LMAX Architecture) com as inovações em modo "Preview" do Java 22.
+A ideia aqui é aplicar princípios severos de otimização: remover filas baseadas em locks pesados, evitar o uso da heap o máximo possível e punir clientes lentos que tentam ditar o ritmo da rede. O Nexus foi construído usando as features experimentais do Java 22 para competir com soluções nativas (C++/Rust) em ambientes de trading (HFT).
 
-Não há filas pesadas. Não há serialização no heap. Os lentos não sobrevivem. 
+## ⚙️ Arquitetura e Mechanical Sympathy
 
-## ⚙️ Mechanical Sympathy & Bases Arquiteturais
-
-O código-fonte do Nexus é uma carta de amor ao kernel do Linux e à CPU. Nossas bases operacionais:
+O projeto é construído sobre quatro pilares técnicos:
 
 1. **Project Panama (FFM API)**: 
-   Eliminação total do custo de alocação no hot-path. Utilizamos Arenas globais compartilhadas e buffers off-heap (`ByteBuffer.allocateDirect()`). Seus dados viajam da placa de rede para a nossa memória e de volta para a rede com **Zero-Copy**. O *Garbage Collector* mal sabe que os pacotes existem.
+   O hot-path não faz alocação na heap. Os pacotes são lidos diretamente para buffers de memória nativa (Zero-Copy) usando Arenas compartilhadas. O Garbage Collector fica isolado das operações de rede.
    
-2. **Hardware SIMD (Project Vector)**: 
-   Parsing byte a byte é lento e obsoleto. O Nexus decodifica o cabeçalho binário dos pacotes (Magic Number, Flags, Topic Hash, e Payload Length) extraindo exatos 8 bytes do off-heap direto para um registrador SIMD de 64-bits. **Validação em O(1) e em 1 ciclo de clock**.
+2. **Project Vector (SIMD)**: 
+   Não fazemos parsing do cabeçalho byte a byte. O decoder carrega os 8 bytes iniciais do frame diretamente em um registrador SIMD de 64-bits. A validação do Magic Number, leitura das flags e do tamanho do payload ocorrem em apenas 1 ciclo de CPU.
 
 3. **LMAX Disruptor & Project Loom**:
-   Nosso coração de roteamento é baseado num *RingBuffer* hiper-otimizado (Wait-Free). Nós utilizamos a anotação `@Contended` isolando ponteiros em linhas de cache L1/L2 (padding de 128 bytes) para destruir o *False Sharing*. O consumo é feito por um exército ilimitado de **Virtual Threads** (Project Loom), garantindo paralelismo brutal para fan-out de mensagens.
+   O roteamento interno usa um RingBuffer customizado e wait-free. Isolamos os ponteiros em linhas de cache L1/L2 com a anotação `@Contended` (padding de 128 bytes) para anular o impacto de False Sharing. O consumo das mensagens é despachado por Virtual Threads, garantindo paralelismo em massa para o fan-out sem exaurir recursos de hardware.
 
-4. **Watchdog Implacável (Guilhotina HFT)**:
-   Acreditamos no backpressure puramente mecânico. Se o `SO_SNDBUF` do socket fechar, paramos de escrever. Se o consumidor engasgar por 3 ciclos consecutivos, a conexão é *sumariamente decapitada*. O broker atende aos rápidos, e corta os lentos.
+4. **Watchdog de Slow Consumers**:
+   Controlamos o uso do `SO_SNDBUF` rigidamente. Se a janela TCP do cliente saturar e ele não conseguir processar as mensagens, o broker não reduz o throughput geral. Após 3 ciclos seguidos de falha de flush na memória off-heap, a conexão do cliente lento é derrubada e limpa pelo watchdog.
 
-## 💻 Requisitos de Sistema
+## 💻 Requisitos
 
-- **Sistema Operacional:** Linux (Recomendado para otimização máxima de rede/NUMA) ou Windows.
-- **Java:** JDK 22+ (Obrigatório devido à dependência do Project Panama FFM, Vector API e Project Loom).
+- **SO:** Linux (Recomendado devido a otimizações de epoll e NUMA) ou Windows.
+- **Java:** JDK 22 (Obrigatório devido às dependências do Project Panama FFM, Vector API e Loom).
 - **Maven:** 3.9+
 
-## 🚀 Como Instalar e Executar
+## 🚀 Como Rodar
 
-1. **Clone o Repositório:**
+1. **Clone o repositório:**
 ```bash
 git clone https://github.com/dDogdev/nio-pubsub-broker.git
 cd nio-pubsub-broker
 ```
 
-2. **Compile com Preview Features:**
+2. **Compile:**
 ```bash
 mvn clean compile package
 ```
 
-3. **Execute com Tuning Máximo:**
-O Nexus **exige** que você passe o controle das flags da JVM para ele. Para habilitar o ZGC Geracional, pré-tocar a memória e ativar os registradores de incubação, rode:
+3. **Suba o broker:**
+Para extrair a melhor performance, é necessário usar o ZGC e habilitar os módulos vetoriais:
 ```bash
 java -XX:+UseZGC -XX:+ZGenerational -XX:+AlwaysPreTouch \
      --enable-preview --add-modules jdk.incubator.vector \
      -jar target/nexus-1.0.0-SNAPSHOT.jar
 ```
 
-## 📜 Especificação do Protocolo de Rede (Binário)
+## 📜 Protocolo Binário
 
-Para interagir com o Nexus, seus clientes TCP devem enviar frames estritos. Tudo é binário. Não use JSON.
+A comunicação via TCP exige um header binário restrito de exatamente 8 bytes.
 
-**Header de 8 Bytes (Big-Endian):**
-- `[Byte 0-1]`: Magic Number obrigatório (`0x4E 0x4D` = 'NM').
+**Estrutura do Header (Big-Endian):**
+- `[Byte 0-1]`: Magic Number (`0x4E 0x4D` = 'NM').
 - `[Byte 2]`: Flags Bitmask (`0x01`=PUB, `0x02`=SUB, `0x04`=ACK).
-- `[Byte 3]`: Topic Hash (`int8`, de 0 a 255) para lookup instantâneo.
-- `[Byte 4-7]`: Payload Length (`int32`), tamanho do corpo da mensagem.
+- `[Byte 3]`: Topic Hash (`int8`, de 0 a 255).
+- `[Byte 4-7]`: Payload Length (`int32`).
 
-Seu pacote final é `[Header] + [Payload de N bytes]`.
+Formato final do frame de rede: `[Header (8 bytes)] + [Payload]`.
 
-## 🤝 Como Contribuir (Open-Source)
+## 🤝 Contribuindo
 
-O Nexus Broker é uma fundação construída pela comunidade para a comunidade. Nós acolhemos pull requests, reportes de bugs e análises de profiling.
+Pull requests são sempre bem-vindos. O critério principal de aceite no core do broker é simples: **não adicione alocações ou locks pesados no hot-path de rede**.
 
-**Nosso processo de PR:**
-1. Faça um fork do projeto e crie uma branch (`feature/seu-recurso` ou `perf/sua-otimizacao`).
-2. Garanta que nenhuma alocação de objeto entre no `hot-path` (`WorkerLoop` ou `DisruptorEngine`).
-3. Adicione testes se possível, e comite detalhando as melhorias de latência ou comportamento mecânico.
-4. Abra o Pull Request. Nosso time de mantenedores revisará seu código focando agressivamente em performance.
+1. Faça um fork e crie uma branch (`feature/seu-recurso` ou `perf/sua-otimizacao`).
+2. Garanta que suas mudanças não adicionam contenção de threads.
+3. Abra o PR com um resumo técnico das mudanças e seu impacto na latência.
 
-### Áreas que precisam da sua ajuda:
-- `C/JNI Sched Affinity`: Pinning nativo de threads do Java nas CPUs.
-- `Bypass do Epoll`: Melhores mecanismos de otimização de SO para redes lentas.
-- `Client SDKs`: Construção de drivers ultra-rápidos (C++, Rust, Go) implementando a spec binária do Nexus.
-
----
-> *"A latência é a gravidade do software. O Nexus foi criado para quebrar a atmosfera."* — **echaib / dogmilian**
+**Principais áreas para colaboração:**
+- Afinidade de CPU via JNI (Thread Pinning em SOs baseados em Unix).
+- Construção de SDKs nativos em Rust, C++ e Go.
+- Refinamentos na mitigação nativa do Linux Epoll Bug.
