@@ -17,78 +17,86 @@ public final class ChannelSessionContext {
     }
 
     private State state = State.AWAITING_HEADER;
-    public final ByteBuffer buffer;
+    // Removed the permanent 64KB off-heap buffer per client to fix OOM DDoS vector
+    // Only a small heap array for fragmented/partial frames
+    private byte[] pendingBytes = null;
+    public long lastActivity = System.currentTimeMillis();
+
     public final SelectionKey key;
     public final SocketChannel channel;
     public final dev.dogmilian.nexus.fault.OutboundRingBuffer outbound = new dev.dogmilian.nexus.fault.OutboundRingBuffer(256);
     
     private VectorizedFrameDecoder.Header currentHeader;
 
-    public ChannelSessionContext(SelectionKey key, SocketChannel channel, ByteBuffer buffer) {
+    public ChannelSessionContext(SelectionKey key, SocketChannel channel) {
         this.key = key;
         this.channel = channel;
-        this.buffer = buffer;
     }
 
-    public void read() throws IOException {
-        int bytesRead = channel.read(buffer);
+    public void read(ByteBuffer sharedReadBuffer) throws IOException {
+        this.lastActivity = System.currentTimeMillis();
+        sharedReadBuffer.clear();
+
+        // Restore pending fragment if exists
+        if (pendingBytes != null) {
+            sharedReadBuffer.put(pendingBytes);
+            pendingBytes = null;
+        }
+
+        int bytesRead = channel.read(sharedReadBuffer);
         if (bytesRead == -1) {
             close();
             return;
         }
 
         // Prepare buffer for reading data
-        buffer.flip();
+        sharedReadBuffer.flip();
 
-        while (buffer.hasRemaining()) {
+        while (sharedReadBuffer.hasRemaining()) {
             if (state == State.AWAITING_HEADER) {
-                if (buffer.remaining() < 8) {
-                    break; // TCP Fragmentation: Wait for more bytes to form the 8-byte header
+                if (sharedReadBuffer.remaining() < 8) {
+                    break; // Wait for more bytes to form the 8-byte header
                 }
                 
-                // SIMD Header Validation & Parsing
-                this.currentHeader = VectorizedFrameDecoder.decodeHeader(buffer, buffer.position());
-                buffer.position(buffer.position() + 8); // Advance pointer past header
+                this.currentHeader = VectorizedFrameDecoder.decodeHeader(sharedReadBuffer, sharedReadBuffer.position());
+                sharedReadBuffer.position(sharedReadBuffer.position() + 8); 
                 this.state = State.READING_PAYLOAD;
             }
 
             if (state == State.READING_PAYLOAD) {
-                if (buffer.remaining() < currentHeader.payloadLength()) {
-                    break; // TCP Fragmentation: Wait for the rest of the payload
+                if (sharedReadBuffer.remaining() < currentHeader.payloadLength()) {
+                    break; // Wait for the rest of the payload
                 }
                 
                 if (currentHeader.payloadLength() < 0) {
                     throw new java.net.ProtocolException("Protocol Violation: Negative payload length");
                 }
 
-                // Zero-copy extraction of the payload slice
-                ByteBuffer payloadSlice = buffer.slice(buffer.position(), currentHeader.payloadLength());
-                buffer.position(buffer.position() + currentHeader.payloadLength());
+                ByteBuffer payloadSlice = sharedReadBuffer.slice(sharedReadBuffer.position(), currentHeader.payloadLength());
+                sharedReadBuffer.position(sharedReadBuffer.position() + currentHeader.payloadLength());
 
-                // Hand-off to RingBuffer (Phase 4 integration)
                 dispatchToRingBuffer(currentHeader, payloadSlice);
 
-                // Reset state for the next continuous frame in the stream
                 this.state = State.AWAITING_HEADER;
                 this.currentHeader = null;
             }
         }
 
-        // Buffer compaction: shifts unread bytes to the start, positioning for next OS write
-        buffer.compact();
+        // Save any unread fragmented bytes into the small heap array
+        if (sharedReadBuffer.hasRemaining()) {
+            pendingBytes = new byte[sharedReadBuffer.remaining()];
+            sharedReadBuffer.get(pendingBytes);
+        }
     }
 
     private void dispatchToRingBuffer(VectorizedFrameDecoder.Header header, ByteBuffer payload) throws java.io.IOException {
         dev.dogmilian.nexus.engine.NexusRingBuffer ring = dev.dogmilian.nexus.NexusGlobal.ENGINE.getRingBuffer();
         
-        // Wait-free claim next sequence
         long seq = ring.next();
         dev.dogmilian.nexus.engine.NexusEvent event = ring.get(seq);
         
-        // Populate event
         event.header = header;
         
-        // Zero-GC Payload copy into pre-allocated buffer
         event.payload.clear();
         if (payload.remaining() > dev.dogmilian.nexus.engine.NexusEvent.MAX_PAYLOAD_SIZE) {
             throw new java.io.IOException("Protocol Violation: Payload exceeded MAX_PAYLOAD_SIZE of " + dev.dogmilian.nexus.engine.NexusEvent.MAX_PAYLOAD_SIZE);
@@ -98,15 +106,16 @@ public final class ChannelSessionContext {
         
         event.sourceChannel = this.channel;
         
-        // Wait-free publish
         ring.publish(seq);
     }
 
-    private void close() {
-        try {
-            channel.close();
-        } catch (IOException ignored) {}
+    public void close() {
+        if (channel.isOpen()) {
+            dev.dogmilian.nexus.NexusGlobal.ACTIVE_CONNECTIONS.decrementAndGet();
+            try {
+                channel.close();
+            } catch (IOException ignored) {}
+        }
         key.cancel();
-        // Here we would release the buffer back to DirectBufferPool
     }
 }

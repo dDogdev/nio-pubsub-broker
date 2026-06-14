@@ -19,9 +19,12 @@ public final class SlowConsumerWatchdog {
     }
 
     public static void executeDecapitation(SelectionKey key, SocketChannel channel) {
-        try {
-            channel.close();
-        } catch (IOException ignored) {}
+        if (channel.isOpen()) {
+            dev.dogmilian.nexus.NexusGlobal.ACTIVE_CONNECTIONS.decrementAndGet();
+            try {
+                channel.close();
+            } catch (IOException ignored) {}
+        }
         if (key != null) {
             key.cancel();
         }

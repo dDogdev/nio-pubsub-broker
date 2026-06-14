@@ -32,6 +32,8 @@ public final class BossAcceptor implements Runnable {
         this.workers = workers;
     }
 
+    private static final int MAX_CONNECTIONS = 50000;
+
     @Override
     public void run() {
         // High priority thread for minimal accept latency
@@ -50,8 +52,18 @@ public final class BossAcceptor implements Runnable {
                     iter.remove();
 
                     if (key.isValid() && key.isAcceptable()) {
+                        if (dev.dogmilian.nexus.NexusGlobal.ACTIVE_CONNECTIONS.get() >= MAX_CONNECTIONS) {
+                            // Backpressure: Drop new connections cleanly to avoid FD exhaustion
+                            SocketChannel client = serverChannel.accept();
+                            if (client != null) {
+                                try { client.close(); } catch (IOException ignored) {}
+                            }
+                            continue;
+                        }
+
                         SocketChannel client = serverChannel.accept();
                         if (client != null) {
+                            dev.dogmilian.nexus.NexusGlobal.ACTIVE_CONNECTIONS.incrementAndGet();
                             configureAndDispatch(client);
                         }
                     }

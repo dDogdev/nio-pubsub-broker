@@ -19,10 +19,14 @@ import dev.dogmilian.nexus.protocol.ChannelSessionContext;
 public final class WorkerLoop implements Runnable {
     private static final int EPOLL_BUG_THRESHOLD = 512;
     private static final long EPOLL_BUG_TIME_WINDOW_MS = 1000;
+    private static final long IDLE_TIMEOUT_MS = 30000; // 30 seconds
 
     private Selector selector;
     private final Queue<SocketChannel> pendingRegistrations = new ConcurrentLinkedQueue<>();
     private final int workerId;
+    
+    // Single shared read buffer per Thread. Prevents 6.4GB OOM DDoS vector.
+    private final ByteBuffer sharedReadBuffer = ByteBuffer.allocateDirect(1024 * 64);
 
     public WorkerLoop(int workerId) throws IOException {
         this.workerId = workerId;
@@ -40,17 +44,25 @@ public final class WorkerLoop implements Runnable {
         
         int emptySelects = 0;
         long windowStart = System.currentTimeMillis();
+        long lastScanTime = System.currentTimeMillis();
 
         while (!Thread.currentThread().isInterrupted()) {
             try {
                 processPendingRegistrations();
 
                 int selected = selector.select(10); // 10ms bounded wait
+                
+                long now = System.currentTimeMillis();
+                
+                // Zombie connection scanner
+                if (now - lastScanTime > 5000) {
+                    scanAndReapZombies(now);
+                    lastScanTime = now;
+                }
 
                 if (selected == 0) {
                     // Linux Epoll CPU Bug Defense
                     emptySelects++;
-                    long now = System.currentTimeMillis();
                     if (now - windowStart > EPOLL_BUG_TIME_WINDOW_MS) {
                         emptySelects = 0;
                         windowStart = now;
@@ -86,16 +98,29 @@ public final class WorkerLoop implements Runnable {
         }
     }
 
+    private void scanAndReapZombies(long now) {
+        for (SelectionKey key : selector.keys()) {
+            if (key.isValid()) {
+                Object attachment = key.attachment();
+                if (attachment instanceof ChannelSessionContext) {
+                    ChannelSessionContext ctx = (ChannelSessionContext) attachment;
+                    if (now - ctx.lastActivity > IDLE_TIMEOUT_MS) {
+                        System.err.println("[WATCHDOG] Idle timeout. Decapitating zombie connection: " + ctx.channel);
+                        ctx.close();
+                    }
+                }
+            }
+        }
+    }
+
     private void processPendingRegistrations() {
         SocketChannel channel;
         while ((channel = pendingRegistrations.poll()) != null) {
             try {
-                // Register for OP_READ by default, OP_WRITE triggers asynchronously when needed
                 SelectionKey key = channel.register(selector, SelectionKey.OP_READ);
-                ChannelSessionContext ctx = new ChannelSessionContext(key, channel, ByteBuffer.allocateDirect(1024 * 64));
+                ChannelSessionContext ctx = new ChannelSessionContext(key, channel);
                 key.attach(ctx);
             } catch (IOException e) {
-                // Decapitate client if registration fails
                 try {
                     channel.close();
                 } catch (IOException ignored) {}
@@ -107,9 +132,9 @@ public final class WorkerLoop implements Runnable {
         ChannelSessionContext ctx = (ChannelSessionContext) key.attachment();
         if (ctx != null) {
             try {
-                ctx.read();
+                ctx.read(sharedReadBuffer);
             } catch (IOException e) {
-                key.cancel();
+                ctx.close();
             }
         }
     }
@@ -125,7 +150,7 @@ public final class WorkerLoop implements Runnable {
                     key.interestOps(key.interestOps() & ~SelectionKey.OP_WRITE); // Remove OP_WRITE when done
                 }
             } catch (IOException e) {
-                dev.dogmilian.nexus.fault.SlowConsumerWatchdog.executeDecapitation(key, ctx.channel);
+                ctx.close();
             }
         }
     }
