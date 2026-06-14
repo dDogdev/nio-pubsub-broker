@@ -74,7 +74,7 @@ public final class ChannelSessionContext {
         buffer.compact();
     }
 
-    private void dispatchToRingBuffer(VectorizedFrameDecoder.Header header, ByteBuffer payload) {
+    private void dispatchToRingBuffer(VectorizedFrameDecoder.Header header, ByteBuffer payload) throws java.io.IOException {
         dev.dogmilian.nexus.engine.NexusRingBuffer ring = dev.dogmilian.nexus.NexusGlobal.ENGINE.getRingBuffer();
         
         // Wait-free claim next sequence
@@ -87,7 +87,7 @@ public final class ChannelSessionContext {
         // Zero-GC Payload copy into pre-allocated buffer
         event.payload.clear();
         if (payload.remaining() > dev.dogmilian.nexus.engine.NexusEvent.MAX_PAYLOAD_SIZE) {
-            payload.limit(payload.position() + dev.dogmilian.nexus.engine.NexusEvent.MAX_PAYLOAD_SIZE);
+            throw new java.io.IOException("Protocol Violation: Payload exceeded MAX_PAYLOAD_SIZE of " + dev.dogmilian.nexus.engine.NexusEvent.MAX_PAYLOAD_SIZE);
         }
         event.payload.put(payload);
         event.payload.flip();

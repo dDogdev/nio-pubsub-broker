@@ -14,7 +14,7 @@ public final class DisruptorEngine {
     private final AtomicLong consumerSequence = new AtomicLong(-1);
 
     public DisruptorEngine(int capacity, TopicRouter router) {
-        this.ringBuffer = new NexusRingBuffer(capacity);
+        this.ringBuffer = new NexusRingBuffer(capacity, consumerSequence);
         this.barrier = new SequenceBarrier(ringBuffer);
         this.router = router;
         // Project Loom: Unbounded lightweight virtual threads
@@ -23,21 +23,19 @@ public final class DisruptorEngine {
 
     public void start() {
         // Dispatch a single Virtual Thread to poll the RingBuffer.
-        // It acts as the orchestrator to fan out actual routing into more Virtual Threads.
+        // It routes synchronously to guarantee ordered consumer sequence updates.
         Thread.ofVirtual().name("nexus-disruptor-poller").start(() -> {
             long nextSequence = 0;
             while (!Thread.currentThread().isInterrupted()) {
                 long available = barrier.waitFor(nextSequence);
                 while (nextSequence <= available) {
                     NexusEvent event = ringBuffer.get(nextSequence);
-                    long currentSeq = nextSequence;
                     
-                    // Route in a separate Virtual Thread for massive concurrent fan-out
-                    virtualExecutor.submit(() -> {
-                        router.route(event);
-                        // Update consumer sequence if we want to release space, etc.
-                        consumerSequence.setRelease(currentSeq);
-                    });
+                    // Route synchronously. TopicRouter makes a detached copy of the payload.
+                    router.route(event);
+                    
+                    // Release the slot safely back to the producer
+                    consumerSequence.setRelease(nextSequence);
                     
                     nextSequence++;
                 }

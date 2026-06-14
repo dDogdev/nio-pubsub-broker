@@ -64,9 +64,16 @@ public final class TopicRouter {
             }
         }
 
+        if (targets.isEmpty()) return;
+
+        // DEEP COPY payload to isolate from RingBuffer lifecycle (Zero-GC only on inbound)
+        byte[] data = new byte[event.payload.remaining()];
+        event.payload.get(data);
+        ByteBuffer detachedPayload = ByteBuffer.wrap(data);
+
         // Fan-out routing
         for (ChannelSessionContext ctx : targets) {
-            boolean success = ctx.outbound.enqueue(event.payload.duplicate());
+            boolean success = ctx.outbound.enqueue(detachedPayload.duplicate());
             if (!success) {
                 dev.dogmilian.nexus.fault.SlowConsumerWatchdog.executeDecapitation(ctx.key, ctx.channel);
                 unsubscribe(hash, ctx);

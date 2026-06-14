@@ -10,6 +10,7 @@ import java.lang.invoke.VarHandle;
 public final class NexusRingBuffer {
     private final NexusEvent[] ring;
     private final int mask;
+    private final java.util.concurrent.atomic.AtomicLong gatingSequence;
 
     @jdk.internal.vm.annotation.Contended("sequence")
     private volatile long cursor = -1; // Claimed by producers
@@ -29,7 +30,7 @@ public final class NexusRingBuffer {
         }
     }
 
-    public NexusRingBuffer(int capacity) {
+    public NexusRingBuffer(int capacity, java.util.concurrent.atomic.AtomicLong gatingSequence) {
         if (Integer.bitCount(capacity) != 1) {
             throw new IllegalArgumentException("Capacity must be a power of 2");
         }
@@ -38,11 +39,17 @@ public final class NexusRingBuffer {
             ring[i] = new NexusEvent();
         }
         this.mask = capacity - 1;
+        this.gatingSequence = gatingSequence;
     }
 
     public long next() {
         // Wait-Free CAS loop equivalent via VarHandle
-        return (long) CURSOR.getAndAdd(this, 1L) + 1;
+        long nextSeq = (long) CURSOR.getAndAdd(this, 1L) + 1;
+        long wrapPoint = nextSeq - ring.length;
+        while (gatingSequence.get() < wrapPoint) {
+            Thread.onSpinWait(); // Mechanical backpressure to prevent overrun
+        }
+        return nextSeq;
     }
 
     public NexusEvent get(long sequence) {
