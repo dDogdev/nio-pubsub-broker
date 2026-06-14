@@ -32,8 +32,8 @@ O Nexus encontra-se em **fase Alpha (v1.0.0-SNAPSHOT)**. O núcleo do motor est�
 
 O projeto é construído sobre quatro pilares técnicos:
 
-1. **Project Panama (FFM API)**: 
-   O hot-path não faz alocação na heap. Os pacotes são lidos diretamente para buffers de memória nativa (Zero-Copy) usando Arenas compartilhadas. O Garbage Collector fica isolado das operações de rede.
+1. **Project Panama (FFM API) e Zero-GC Absoluto**: 
+   O hot-path atinge o ápice da simpatia de hardware: **0 bytes de alocação na heap** durante o roteamento. O broker pré-aloca 64.000 buffers de memória nativa (off-heap) no boot. Quando um socket lê dados da placa de rede, o pacote TCP é copiado em bloco diretamente para esses buffers pré-alocados no RingBuffer. O Garbage Collector do Java fica literalmente inativo durante o processamento das mensagens.
    
 2. **Project Vector (SIMD)**: 
    Não fazemos parsing do cabeçalho byte a byte. O decoder carrega os 8 bytes iniciais do frame diretamente em um registrador SIMD de 64-bits. A validação do Magic Number, leitura das flags e do tamanho do payload ocorrem em apenas 1 ciclo de CPU.
