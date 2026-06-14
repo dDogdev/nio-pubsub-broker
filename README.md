@@ -84,6 +84,44 @@ Após a aceitação do Handshake, a conexão passa para o tráfego aberto de fra
 
 Formato final do frame de rede: `[Header (8 bytes)] + [Payload]`.
 
+## 🧪 Testando na Prática (Exemplo com Python)
+
+Como o Nexus não usa HTTP nem WebSockets, você precisa de um cliente TCP raw. Veja como o **Zero-Trust** e a publicação funcionam em 15 linhas de Python:
+
+```python
+import socket
+import struct
+import time
+
+# 1. Conectar ao Broker
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.connect(('127.0.0.1', 9090))
+
+# 2. Handshake Zero-Trust (Obrigatório)
+# Enviamos o SERVER_SECRET (0xCAFEBABE12345678) em Big-Endian ('>Q')
+handshake = struct.pack('>Q', 0xCAFEBABE12345678)
+s.sendall(handshake)
+print("Handshake enviado. Conexão liberada!")
+
+# 3. Publicar uma Mensagem (PUB)
+payload = b"HELLO NEXUS"
+# Header: Magic('NM'), Flags(0x01=PUB), TopicHash(0x42), PayloadLength
+header = struct.pack('>2s b b i', b'NM', 0x01, 0x42, len(payload))
+
+s.sendall(header + payload)
+print(f"Mensagem enviada com sucesso: {payload}")
+
+time.sleep(1)
+s.close()
+```
+
+### O que acontece se um Hacker tentar conectar?
+Se alguém abrir um terminal e rodar `telnet 127.0.0.1 9090` e tentar mandar comandos genéricos ou lixo:
+1. O socket abre, mas fica preso no limbo (`AWAITING_HANDSHAKE`).
+2. O hacker tenta mandar os bytes "HACK".
+3. O decodificador percebe que os bytes não formam a chave secreta `0xCAFEBABE12345678L`.
+4. O servidor joga silenciosamente a `ProtocolException` e **fecha a conexão TCP instantaneamente** na cara do hacker, sem gastar 1 byte de processamento do LMAX Disruptor.
+
 ## 🤝 Contribuindo
 
 Pull requests são sempre bem-vindos. O critério principal de aceite no core do broker é simples: **não adicione alocações ou locks pesados no hot-path de rede**.
