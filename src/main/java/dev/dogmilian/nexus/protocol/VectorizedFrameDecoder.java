@@ -5,6 +5,8 @@ import jdk.incubator.vector.VectorSpecies;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
+import java.lang.foreign.MemorySegment;
+
 /**
  * SIMD-powered Frame Decoder using Project Vector.
  * Extracts the 8-byte frame header in 1 CPU clock cycle using 64-bit registers.
@@ -24,7 +26,8 @@ public final class VectorizedFrameDecoder {
 
     public static Header decodeHeader(ByteBuffer buffer, int offset) {
         // Zero-copy SIMD load: pull 8 bytes directly from off-heap memory to CPU register
-        ByteVector vector = ByteVector.fromByteBuffer(SPECIES, buffer, offset, ByteOrder.BIG_ENDIAN);
+        MemorySegment segment = MemorySegment.ofBuffer(buffer);
+        ByteVector vector = ByteVector.fromMemorySegment(SPECIES, segment, offset, ByteOrder.BIG_ENDIAN);
         
         // 1-cycle extraction using SIMD lane access
         byte m0 = vector.lane(0);
