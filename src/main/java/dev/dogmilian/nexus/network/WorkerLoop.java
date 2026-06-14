@@ -115,7 +115,19 @@ public final class WorkerLoop implements Runnable {
     }
 
     private void handleWrite(SelectionKey key) {
-        // Implemented in Phase 5 (Backpressure / Outbound buffers)
+        dev.dogmilian.nexus.protocol.ChannelSessionContext ctx = (dev.dogmilian.nexus.protocol.ChannelSessionContext) key.attachment();
+        if (ctx != null) {
+            try {
+                boolean allFlushed = ctx.outbound.flush(ctx.channel);
+                if (!allFlushed) {
+                    dev.dogmilian.nexus.fault.SlowConsumerWatchdog.checkAndExecute(key, ctx.outbound, ctx.channel);
+                } else {
+                    key.interestOps(key.interestOps() & ~SelectionKey.OP_WRITE); // Remove OP_WRITE when done
+                }
+            } catch (IOException e) {
+                dev.dogmilian.nexus.fault.SlowConsumerWatchdog.executeDecapitation(key, ctx.channel);
+            }
+        }
     }
 
     private void rebuildSelector() throws IOException {

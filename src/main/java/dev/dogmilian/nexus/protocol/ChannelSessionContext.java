@@ -17,9 +17,10 @@ public final class ChannelSessionContext {
     }
 
     private State state = State.AWAITING_HEADER;
-    private final ByteBuffer buffer;
-    private final SelectionKey key;
-    private final SocketChannel channel;
+    public final ByteBuffer buffer;
+    public final SelectionKey key;
+    public final SocketChannel channel;
+    public final dev.dogmilian.nexus.fault.OutboundRingBuffer outbound = new dev.dogmilian.nexus.fault.OutboundRingBuffer(256);
     
     private VectorizedFrameDecoder.Header currentHeader;
 

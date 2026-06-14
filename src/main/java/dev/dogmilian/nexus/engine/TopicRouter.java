@@ -7,6 +7,8 @@ import java.util.concurrent.locks.StampedLock;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 
+import dev.dogmilian.nexus.protocol.ChannelSessionContext;
+
 /**
  * Fast O(1) Topic Router based on StampedLock.
  * 256 predefined topic hash buckets for immediate lookup.
@@ -21,23 +23,23 @@ public final class TopicRouter {
         }
     }
 
-    public void subscribe(int topicHash, SocketChannel channel) {
+    public void subscribe(int topicHash, ChannelSessionContext ctx) {
         TopicBucket bucket = buckets[topicHash & 0xFF];
         long stamp = bucket.lock.writeLock();
         try {
-            if (!bucket.subscribers.contains(channel)) {
-                bucket.subscribers.add(channel);
+            if (!bucket.subscribers.contains(ctx)) {
+                bucket.subscribers.add(ctx);
             }
         } finally {
             bucket.lock.unlockWrite(stamp);
         }
     }
 
-    public void unsubscribe(int topicHash, SocketChannel channel) {
+    public void unsubscribe(int topicHash, ChannelSessionContext ctx) {
         TopicBucket bucket = buckets[topicHash & 0xFF];
         long stamp = bucket.lock.writeLock();
         try {
-            bucket.subscribers.remove(channel);
+            bucket.subscribers.remove(ctx);
         } finally {
             bucket.lock.unlockWrite(stamp);
         }
@@ -50,7 +52,7 @@ public final class TopicRouter {
 
         // Optimistic read for maximum performance
         long stamp = bucket.lock.tryOptimisticRead();
-        List<SocketChannel> targets = copySubscribers(bucket.subscribers);
+        List<ChannelSessionContext> targets = copySubscribers(bucket.subscribers);
 
         if (!bucket.lock.validate(stamp)) {
             // Fallback to read lock if optimistic read failed (concurrent write)
@@ -63,24 +65,28 @@ public final class TopicRouter {
         }
 
         // Fan-out routing
-        for (SocketChannel channel : targets) {
-            try {
-                // In Phase 5 we will push this to their OutboundRingBuffer.
-                // For now, we write directly to demonstrate flow.
-                channel.write(event.payload.duplicate());
-            } catch (IOException e) {
-                // Channel closed or broken
-                unsubscribe(hash, channel);
+        for (ChannelSessionContext ctx : targets) {
+            boolean success = ctx.outbound.enqueue(event.payload.duplicate());
+            if (!success) {
+                dev.dogmilian.nexus.fault.SlowConsumerWatchdog.executeDecapitation(ctx.key, ctx.channel);
+                unsubscribe(hash, ctx);
+            } else {
+                try {
+                    ctx.key.interestOps(ctx.key.interestOps() | java.nio.channels.SelectionKey.OP_WRITE);
+                    ctx.key.selector().wakeup();
+                } catch (Exception e) {
+                    unsubscribe(hash, ctx);
+                }
             }
         }
     }
 
-    private List<SocketChannel> copySubscribers(List<SocketChannel> original) {
+    private List<ChannelSessionContext> copySubscribers(List<ChannelSessionContext> original) {
         return new ArrayList<>(original); // Fast shallow copy
     }
 
     private static final class TopicBucket {
         final StampedLock lock = new StampedLock();
-        final List<SocketChannel> subscribers = new ArrayList<>();
+        final List<ChannelSessionContext> subscribers = new ArrayList<>();
     }
 }
