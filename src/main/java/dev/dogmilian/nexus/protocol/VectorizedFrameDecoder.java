@@ -24,7 +24,7 @@ public final class VectorizedFrameDecoder {
     private static final byte MAGIC_0 = 0x4E; // 'N'
     private static final byte MAGIC_1 = 0x4D; // 'M'
 
-    public static Header decodeHeader(ByteBuffer buffer, int offset) {
+    public static Header decodeHeader(ByteBuffer buffer, int offset) throws java.io.IOException {
         // Zero-copy SIMD load: pull 8 bytes directly from off-heap memory to CPU register
         MemorySegment segment = MemorySegment.ofBuffer(buffer);
         ByteVector vector = ByteVector.fromMemorySegment(SPECIES, segment, offset, ByteOrder.BIG_ENDIAN);
@@ -34,7 +34,7 @@ public final class VectorizedFrameDecoder {
         byte m1 = vector.lane(1);
 
         if (m0 != MAGIC_0 || m1 != MAGIC_1) {
-            throw new IllegalArgumentException("Protocol Violation: Invalid Magic Number");
+            throw new java.net.ProtocolException("Protocol Violation: Invalid Magic Number");
         }
 
         byte flags = vector.lane(2);

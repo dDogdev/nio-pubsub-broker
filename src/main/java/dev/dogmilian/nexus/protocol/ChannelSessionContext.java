@@ -56,6 +56,10 @@ public final class ChannelSessionContext {
                 if (buffer.remaining() < currentHeader.payloadLength()) {
                     break; // TCP Fragmentation: Wait for the rest of the payload
                 }
+                
+                if (currentHeader.payloadLength() < 0) {
+                    throw new java.net.ProtocolException("Protocol Violation: Negative payload length");
+                }
 
                 // Zero-copy extraction of the payload slice
                 ByteBuffer payloadSlice = buffer.slice(buffer.position(), currentHeader.payloadLength());
