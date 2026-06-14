@@ -71,6 +71,11 @@ public final class ChannelSessionContext {
                 }
                 
                 this.currentHeader = VectorizedFrameDecoder.decodeHeader(sharedReadBuffer, sharedReadBuffer.position());
+                
+                if (currentHeader.payloadLength() > dev.dogmilian.nexus.engine.NexusEvent.MAX_PAYLOAD_SIZE) {
+                    throw new java.net.ProtocolException("Protocol Violation: Payload exceeded MAX_PAYLOAD_SIZE of " + dev.dogmilian.nexus.engine.NexusEvent.MAX_PAYLOAD_SIZE);
+                }
+                
                 sharedReadBuffer.position(sharedReadBuffer.position() + 8); 
                 this.state = State.READING_PAYLOAD;
             }
@@ -110,9 +115,6 @@ public final class ChannelSessionContext {
         event.header = header;
         
         event.payload.clear();
-        if (payload.remaining() > dev.dogmilian.nexus.engine.NexusEvent.MAX_PAYLOAD_SIZE) {
-            throw new java.io.IOException("Protocol Violation: Payload exceeded MAX_PAYLOAD_SIZE of " + dev.dogmilian.nexus.engine.NexusEvent.MAX_PAYLOAD_SIZE);
-        }
         event.payload.put(payload);
         event.payload.flip();
         
